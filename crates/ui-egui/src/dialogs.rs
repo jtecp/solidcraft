@@ -244,10 +244,12 @@ crate::dialog_descriptor::dialog_descriptors! {
                 angle: String,
             },
             /// Loft through profiles of different sketches, in pick order; `rail_fit` how its guide
-            /// rails reshape the sections (an index into the sweep dialog's rail fits).
+            /// rails reshape the sections (an index into the sweep dialog's rail fits); `ends` how
+            /// it leaves its first section and arrives at its last.
             Loft {
                 operation: usize,
                 rail_fit: usize,
+                ends: crate::dialogs_loft::LoftEnds,
             },
             /// Sweep a profile along a path of sketch curves.
             Sweep {
@@ -1096,10 +1098,12 @@ impl Dialog {
                 Kind::PatternCirc { count: "6".into(), angle: "360 deg".into() },
                 vec![SelInput::new("Objects", BODIES, true), SelInput::new("Axis", AXIS_PICKS, false)],
             ),
-            "solid.loft" => Dialog::new(Kind::Loft { operation: usize::from(has_bodies), rail_fit: 0 }, {
-                let [rail, rail2] = crate::dialogs_sweep::rail_inputs();
-                vec![SelInput::new("Profiles", PROFILES | selection::POINTS, true), rail, rail2]
-            }),
+            "solid.loft" => {
+                Dialog::new(Kind::Loft { operation: usize::from(has_bodies), rail_fit: 0, ends: crate::dialogs_loft::LoftEnds::default() }, {
+                    let [rail, rail2] = crate::dialogs_sweep::rail_inputs();
+                    vec![SelInput::new("Profiles", PROFILES | selection::POINTS, true), rail, rail2]
+                })
+            }
             "solid.sweep" => Dialog::new(Kind::Sweep { operation: usize::from(has_bodies), opts: crate::dialogs_sweep::SweepOpts::default() }, {
                 let [rail, rail2] = crate::dialogs_sweep::rail_inputs();
                 vec![
@@ -6103,7 +6107,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             pattern_objects(s, sels(d, 0), &mut p);
             ("solid.pattern.circular", p)
         }
-        Kind::Loft { operation, rail_fit } => {
+        Kind::Loft { operation, rail_fit, ends } => {
             need(0, "profiles of two or more sketches")?;
             // Sections follow the picks. Profiles picked one after another in one sketch are one
             // section, such as both halves of a split outline (#11720); a later return to that
@@ -6142,6 +6146,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             let mut p = json!({"sections": sections, "operation": OPS.get(*operation).copied().unwrap_or("new")});
             crate::dialogs_sweep::rail_params(app, *rail_fit, [sels(d, 1), sels(d, 2)], &mut p)?;
+            crate::dialogs_loft::params(ends, &mut p);
             ("solid.loft", p)
         }
         Kind::Sweep { operation, opts } => {
@@ -8317,9 +8322,13 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             }
             d
         }
-        FeatureKind::Loft { sections, operation, targets, rails, rail_fit } => {
+        FeatureKind::Loft { sections, operation, targets, rails, rail_fit, start_condition, end_condition, start_weight, end_weight } => {
             let mut d = start("solid.loft")?;
-            d.kind = Kind::Loft { operation: op_index(operation), rail_fit: crate::dialogs_sweep::rail_fit_index(*rail_fit) };
+            d.kind = Kind::Loft {
+                operation: op_index(operation),
+                rail_fit: crate::dialogs_sweep::rail_fit_index(*rail_fit),
+                ends: crate::dialogs_loft::LoftEnds::of((*start_condition, start_weight), (*end_condition, end_weight)),
+            };
             for (inp, items) in d.inputs.iter_mut().skip(1).zip(crate::dialogs_sweep::rail_sels(rails, s.active_sketch)) {
                 inp.items = items;
             }

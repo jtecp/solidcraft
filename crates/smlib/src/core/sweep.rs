@@ -60,7 +60,7 @@ use solidcore::{EntityRef, SolidError};
 use super::blend::status;
 use super::offset::{face_miss, pick_faces};
 use super::{Body, run, with_body};
-use crate::sweeps::{Affine, Curve as Profile, DraftCorner, Ends, MAX_CURVES, MAX_STATION_CURVES, MAX_STATIONS, SweepFrame};
+use crate::sweeps::{Affine, Curve as Profile, DraftCorner, Ends, LoftEnd, MAX_CURVES, MAX_STATION_CURVES, MAX_STATIONS, SweepFrame};
 use crate::sweeps::{CURVE_MAX_DEGREE, CURVE_MAX_POINTS};
 use crate::{Error, Result};
 
@@ -996,6 +996,35 @@ pub(crate) fn loft(sections: &[Vec<Profile>], degree: u32, cap: bool) -> Result<
         let refs: Vec<Option<&Curve>> = curves.iter().map(Some).collect();
         match create_skin_primitive(k, &counts, &refs, degree as usize, cap) {
             Ok(r) => finish(r.brep, cap),
+            Err(e) => Ok(Err(status(e))),
+        }
+    })
+}
+
+/// [`loft`] with how the skin leaves its first section and arrives at its last (`ends`, at least
+/// one of them square to its section's plane): solidcore-ops' recipe
+/// ([`solidcore_ops::sweep::skin_with_ends`]) on this backend's kernel, cubic across the
+/// sections. No side of such a loft is taken for flat beforehand ([`planar_loft`]): the kernel's
+/// skin makes its flat walls planes itself.
+pub(crate) fn loft_with_ends(sections: &[Vec<Profile>], cap: bool, ends: [LoftEnd; 2]) -> Result<Body> {
+    if sections.len() < 2 || sections.len() > MAX_CURVES {
+        return Err(Error::Argument);
+    }
+    let all: Vec<Profile> = sections.iter().flatten().cloned().collect();
+    making("smlib_loft_with_ends", |k| {
+        let curves = match parse(k, &all) {
+            Ok(c) => c,
+            Err(e) => return Ok(Err(e)),
+        };
+        if sections.iter().any(|s| s.is_empty() || s.len() > MAX_CURVES) {
+            return Ok(Err(Error::Argument));
+        }
+        let counts: Vec<usize> = sections.iter().map(Vec::len).collect();
+        let refs: Vec<Option<&Curve>> = curves.iter().map(Some).collect();
+        match solidcore_ops::sweep::skin_with_ends(k, &counts, &refs, cap, ends) {
+            Ok(Ok(b)) => finish(b, cap),
+            // (the recipe's own refusal: no square end, or a weight that is no number above 0)
+            Ok(Err(_)) => Ok(Err(Error::Argument)),
             Err(e) => Ok(Err(status(e))),
         }
     })

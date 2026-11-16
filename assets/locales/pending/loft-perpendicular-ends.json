@@ -1,0 +1,50 @@
+{
+  "en": {
+    "ui.loft_start_condition": "Start Condition",
+    "ui.loft_end_condition": "End Condition",
+    "ui.loft_start_weight": "Start Weight",
+    "ui.loft_end_weight": "End Weight"
+  },
+  "ar": {
+    "ui.loft_start_condition": "شرط البداية",
+    "ui.loft_end_condition": "شرط النهاية",
+    "ui.loft_start_weight": "وزن البداية",
+    "ui.loft_end_weight": "وزن النهاية"
+  },
+  "he": {
+    "ui.loft_start_condition": "תנאי התחלה",
+    "ui.loft_end_condition": "תנאי סיום",
+    "ui.loft_start_weight": "משקל התחלה",
+    "ui.loft_end_weight": "משקל סיום"
+  },
+  "ja": {
+    "ui.loft_start_condition": "開始条件",
+    "ui.loft_end_condition": "終了条件",
+    "ui.loft_start_weight": "開始ウェイト",
+    "ui.loft_end_weight": "終了ウェイト"
+  },
+  "vi": {
+    "ui.loft_start_condition": "Điều kiện đầu",
+    "ui.loft_end_condition": "Điều kiện cuối",
+    "ui.loft_start_weight": "Trọng số đầu",
+    "ui.loft_end_weight": "Trọng số cuối"
+  },
+  "zh": {
+    "ui.loft_start_condition": "起始条件",
+    "ui.loft_end_condition": "结束条件",
+    "ui.loft_start_weight": "起始权重",
+    "ui.loft_end_weight": "结束权重"
+  },
+  "de": {
+    "ui.loft_start_condition": "Startbedingung",
+    "ui.loft_end_condition": "Endbedingung",
+    "ui.loft_start_weight": "Startgewicht",
+    "ui.loft_end_weight": "Endgewicht"
+  },
+  "ko": {
+    "ui.loft_start_condition": "시작 조건",
+    "ui.loft_end_condition": "끝 조건",
+    "ui.loft_start_weight": "시작 가중치",
+    "ui.loft_end_weight": "끝 가중치"
+  }
+}

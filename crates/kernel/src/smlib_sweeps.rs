@@ -119,7 +119,7 @@ pub(crate) fn refuse(what: &str) -> KernelError {
 mod imp {
     use std::collections::BTreeSet;
 
-    use solidcraft_smlib::sweeps::{Affine, Curve, DraftCorner, Ends, SweepFrame};
+    use solidcraft_smlib::sweeps::{Affine, Curve, DraftCorner, Ends, LoftEnd, SweepFrame};
     use solidcraft_smlib::{Brep, CheckLevel};
 
     use solidcore_record::Vec2;
@@ -131,6 +131,9 @@ mod imp {
     fn failed(what: &str, e: impl crate::Cause) -> KernelError {
         KernelError::smlib(format!("SMLib {what}"), e)
     }
+
+    /// The kernel's status for input it refuses (`SM_ERR_INVALID_INPUT`).
+    const INVALID_INPUT: i32 = 1007;
 
     fn corner(c: crate::DraftCorner) -> DraftCorner {
         match c {
@@ -1999,8 +2002,29 @@ mod imp {
 
     /// A loft through `sections` (each a closed loop of pieces, all re-split to the same count
     /// and lined up), `first` the index of the section given first (its cap is the start cap).
-    pub(crate) fn loft(sections: &[(Plane, Vec<Piece>)], first: usize) -> Result<Body> {
+    /// `ends` say how it leaves the section given first and arrives at the one given last; with
+    /// an end square to its section the loft is cubic across the sections, whatever their number.
+    pub(crate) fn loft(sections: &[(Plane, Vec<Piece>)], first: usize, ends: [crate::LoftEnd; 2]) -> Result<Body> {
         let curves: Vec<Vec<Curve>> = sections.iter().map(|(pl, ps)| curves(pl, ps)).collect::<Result<_>>()?;
+        if ends != [crate::LoftEnd::Free; 2] {
+            // The sections run from the one given first, or (in canonical order) from the last.
+            let [start, end] = ends.map(|e| match e {
+                crate::LoftEnd::Free => LoftEnd::Free,
+                crate::LoftEnd::Square { weight } => LoftEnd::Square { weight },
+            });
+            let ends = if first == 0 { [start, end] } else { [end, start] };
+            let brep = Brep::loft_with_ends(&curves, true, ends).map_err(|e| match e {
+                // The kernel's refusal of an end's input. The weights are checked before it
+                // and a sketch's sections are planar, so what is left is an end with no side
+                // to leave to.
+                solidcraft_smlib::Error::Status(INVALID_INPUT) => KernelError::Invalid(
+                    "a loft end square to its section needs the next section on one side of that section's plane: the next section's centre lies in it"
+                        .into(),
+                ),
+                e => failed("loft", e),
+            })?;
+            return loft_named(sections, first, brep);
+        }
         // Ruled between two sections, else smooth through them (cubic from four).
         let degree = match sections.len() {
             0..=2 => 1,
@@ -2014,6 +2038,12 @@ mod imp {
     /// across them; `sections` and `first` as [`loft`] takes them name the faces.
     fn loft_through(sections: &[(Plane, Vec<Piece>)], first: usize, curves: &[Vec<Curve>], degree: u32) -> Result<Body> {
         let brep = Brep::loft(curves, degree, true).map_err(|e| failed("loft", e))?;
+        loft_named(sections, first, brep)
+    }
+
+    /// The loft `brep` skinned through `sections` as a body, its faces named: `sections` and
+    /// `first` as [`loft`] takes them.
+    fn loft_named(sections: &[(Plane, Vec<Piece>)], first: usize, brep: Brep) -> Result<Body> {
         let body = body_of(brep, "loft")?;
         let (Some((start, lead)), Some(last)) = (sections.get(first), sections.get(if first == 0 { sections.len().saturating_sub(1) } else { 0 }))
         else {

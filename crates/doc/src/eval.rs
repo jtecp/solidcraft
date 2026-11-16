@@ -7724,10 +7724,13 @@ fn feature_tools_with_constructor(
             let m = crate::rigid(Vec3::ZERO, origin_w, axis_w, -start);
             regions.iter().zip(bodies).map(|(r, body)| Ok(tool(r, kernel::transform_matrix(&body, m)?, Some(&body)))).collect()
         }
-        FeatureKind::Loft { sections, rails, .. } if sections.iter().any(|s| s.point.is_some()) => {
+        FeatureKind::Loft { sections, rails, start_condition, end_condition, .. } if sections.iter().any(|s| s.point.is_some()) => {
             // A profile lofted to a sketch point (an apex).
             if !rails.is_empty() {
                 return Err(DocError::Invalid("not supported yet: guide rails on a loft to a point".into()));
+            }
+            if !(start_condition.is_free() && end_condition.is_free()) {
+                return Err(DocError::Invalid("not supported yet: a perpendicular start or end on a loft to a point".into()));
             }
             let [a, b] = &sections[..] else { return Err(DocError::Invalid("not supported yet: a point section in a loft of more than two".into())) };
             let (prof, pt) = if a.point.is_some() { (b, a) } else { (a, b) };
@@ -7811,7 +7814,8 @@ fn feature_tools_with_constructor(
             let coil = Traced::unnamed(kernel::sweep_helix(&plane, &region, *base, axis, pitch, n)?);
             Ok(vec![coil.with_recipe(tool_recipe(doc, f, vals))])
         }
-        FeatureKind::Loft { sections, rails, rail_fit, .. } => {
+        FeatureKind::Loft { sections, rails, rail_fit, start_condition, end_condition, start_weight, end_weight, .. } => {
+            let ends = [loft_end(vals, *start_condition, start_weight)?, loft_end(vals, *end_condition, end_weight)?];
             let mut secs = Vec::new();
             let mut sketches = Vec::new();
             for sec in sections {
@@ -7826,12 +7830,16 @@ fn feature_tools_with_constructor(
             // Its caps are the first and last sections, its sides named by the curves they run
             // between.
             let body = if rails.is_empty() {
-                kernel::loft_regions(&secs)?
+                kernel::loft_regions_with_ends(&secs, ends)?
             } else {
                 // Rails shape the sections' outlines; sections with holes wait for rails that
                 // carry the holes too.
                 if secs.iter().any(|(_, r)| !r.holes.is_empty()) {
                     return Err(DocError::Invalid("not supported yet: guide rails on a loft whose sections have holes".into()));
+                }
+                // The rails say how the loft runs between its sections; so would an end.
+                if ends != [kernel::LoftEnd::Free; 2] {
+                    return Err(DocError::Invalid("not supported yet: guide rails on a loft with a perpendicular start or end".into()));
                 }
                 let outlines: Vec<_> = secs.iter().map(|(p, r)| (*p, r.outer.clone())).collect();
                 // The rails run from the end at the first section.
@@ -7969,6 +7977,22 @@ pub(crate) fn sweep_control(
     let ctl = kernel::SweepControl { orientation, twist, scale, rails, rail_fit: kernel_rail_fit(rail_fit) };
     ctl.check()?;
     Ok(ctl)
+}
+
+/// One end of a loft for the kernel: free, or perpendicular to its section with its weight
+/// expression's value (none: 1). A free end's weight is not read. Out-of-range weights are
+/// refused by the kernel.
+pub(crate) fn loft_end(vals: &BTreeMap<String, Value>, condition: crate::LoftEnd, weight: &Option<crate::Expr>) -> Result<kernel::LoftEnd> {
+    match condition {
+        crate::LoftEnd::Free => Ok(kernel::LoftEnd::Free),
+        crate::LoftEnd::Perpendicular => {
+            let weight = match weight {
+                Some(w) => val(vals, w, Kind::Unitless)?,
+                None => 1.0,
+            };
+            Ok(kernel::LoftEnd::Square { weight })
+        }
+    }
 }
 
 /// How guide rails reshape a sweep's profile or a loft's sections, for the kernel.

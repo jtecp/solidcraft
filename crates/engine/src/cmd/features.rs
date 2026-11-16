@@ -4,8 +4,8 @@ use serde_json::{Value, json};
 use solidcore_record::Vec3;
 use solidcraft_doc::construct::DatumItem;
 use solidcraft_doc::{
-    AxisRef, Direction, Expr, Extent, FeatureKind, Operation, PointExpr, ProfileSel, RailFit, SweepOrientation, SweepRail, ThinSide, ThinWall,
-    Touching, expr::Kind, point_expr,
+    AxisRef, Direction, Expr, Extent, FeatureKind, LoftEnd, Operation, PointExpr, ProfileSel, RailFit, SweepOrientation, SweepRail, ThinSide,
+    ThinWall, Touching, expr::Kind, point_expr,
 };
 use solidcraft_doc::{BodyName, FeatureName, SketchId};
 use solidcraft_doc::{Dir, FacePick, Position};
@@ -69,7 +69,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&SWEEP_CONTRACT)
         .output(output_schema_for::<FeatureResult>)
         .params("sketch: profile sketch; profiles?; path_sketch: sketch; path: [curve ids in order]; path_body?: body name; path_edges?: [points on its edges] (the path is a chain of that body's edges, instead of a sketch's curves); orientation?: perpendicular (default: square to the path, turning with it) | parallel (as drawn: the profile moves without turning; the path must keep crossing its plane) | [x,y,z] (square to the path, its turn about the path fixed by this direction); twist?: angle expr (the profile turns this much about the path over its length; within 4 turns); scale?: expr (the profile's scale at the end, linear along the path; 0.01…100); rails?: [{sketch?: sketch (default path_sketch), curves: [curve ids in order]}] (guide rails, one or two, each meeting every plane square to the path once along it, from the end nearest the path's start: one rail turns the profile so its point where the rail starts stays on the rail and scales it with the rail's distance from the path; two rails carry it between them, its points where they start staying on both; rails take the default orientation, no twist and no scale, and a path without sharp corners); rail_fit?: scale (default: the profile grows and shrinks evenly) | stretch (only across to the rail, between the rails); operation?, touching?, targets?, name?, body_name?"),
-    CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex)] (2…50, in order; matching hole counts, no holes at an apex); rails?: [{sketch, curves: [ids in order]}] (one or two guide rails from the first section to the last, through every section's outline: the loft follows them between the sections; not with sections that have holes); rail_fit?: scale|stretch (default scale: with one rail the sections grow evenly with the rail's distance from their middle, with two with the distance between the rails; stretch: only that way); operation?, touching?, targets? (Join excludes hidden bodies from automatic targets; explicit targets or participants may include them), name?, body_name?"),
+    CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex)] (2…50, in order; matching hole counts, no holes at an apex); rails?: [{sketch, curves: [ids in order]}] (one or two guide rails from the first section to the last, through every section's outline: the loft follows them between the sections; not with sections that have holes); rail_fit?: scale|stretch (default scale: with one rail the sections grow evenly with the rail's distance from their middle, with two with the distance between the rails; stretch: only that way); start_condition?, end_condition?: free|perpendicular (default free; perpendicular: the loft leaves the first section, or arrives at the last, perpendicular to that section's sketch plane, on the side the next section is on; not with rails or an apex); start_weight?, end_weight?: expr (default 1, 0.01…10, with a perpendicular condition: how far each point runs on perpendicular before it turns, as a share of its own distance to the next section, so parts of a section near the next one turn sooner; less than 1 turns sooner, more runs on for longer, and between sections on parallel planes the walls stay between the planes up to 3); operation?, touching?, targets? (Join excludes hidden bodies from automatic targets; explicit targets or participants may include them), name?, body_name?"),
     CommandSpec::new("solid.box", "Box", crate::checked!("solid.box", prim_box))
         .at("SOLID", "CREATE")
         .icon("box")
@@ -4157,6 +4157,16 @@ fn loft(s: &mut Session, p: &Value) -> Result<Value> {
         sections.push(solidcraft_doc::LoftSection { sketch: SketchId(sketch), profiles: profiles_or_default(s, sec, sketch, cmd)?, point: None });
     }
     let (rails, rail_fit) = guide_rails(s, p, cmd, "loft", None)?;
+    let (start_condition, start_weight) = loft_end(s, p, cmd, "start_condition", "start_weight")?;
+    let (end_condition, end_weight) = loft_end(s, p, cmd, "end_condition", "end_weight")?;
+    if !(start_condition.is_free() && end_condition.is_free()) {
+        if !rails.is_empty() {
+            return Err(bad(cmd, "not supported yet: guide rails on a loft with a perpendicular start or end"));
+        }
+        if sections.iter().any(|sec| sec.point.is_some()) {
+            return Err(bad(cmd, "not supported yet: a perpendicular start or end on a loft to a point"));
+        }
+    }
     let operation = operation(p, cmd)?;
     let sketches: Vec<u64> = sections.iter().map(|sec| sec.sketch.0).collect();
     let mut targets = face_join_targets(s, p, operation, &sketches, cmd)?;
@@ -4178,7 +4188,33 @@ fn loft(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    add_feature(s, p, FeatureKind::Loft { sections, operation, targets, rails, rail_fit })
+    add_feature(s, p, FeatureKind::Loft { sections, operation, targets, rails, rail_fit, start_condition, end_condition, start_weight, end_weight })
+}
+
+/// One end of a loft from the parameters `condition` (`free`, the default, or `perpendicular`)
+/// and `weight` (an expression, only with a perpendicular condition): the weight is checked
+/// here against the range the kernel takes, so a value out of it is refused with its name.
+fn loft_end(s: &Session, p: &Value, cmd: &str, condition: &str, weight: &str) -> Result<(LoftEnd, Option<Expr>)> {
+    let end = match p.get(condition) {
+        None | Some(Value::Null) => LoftEnd::Free,
+        Some(Value::String(word)) if word == "free" => LoftEnd::Free,
+        Some(Value::String(word)) if word == "perpendicular" => LoftEnd::Perpendicular,
+        Some(_) => return Err(bad(cmd, format!("`{condition}` must be free or perpendicular"))),
+    };
+    let weight = match p.get(weight) {
+        None | Some(Value::Null) => None,
+        Some(_) if end.is_free() => return Err(bad(cmd, format!("`{weight}` needs `{condition}: perpendicular`"))),
+        Some(given) => {
+            let e = expr(p, weight).ok_or_else(|| bad(cmd, format!("`{weight}` {}", expr_problem(Some(given)))))?;
+            let v = s.doc.eval(&e, Kind::Unitless).map_err(|err| bad(cmd, format!("{weight}: {err}")))?;
+            let (least, most) = (solidcraft_kernel::LoftEnd::MIN_WEIGHT, solidcraft_kernel::LoftEnd::MAX_WEIGHT);
+            if !(least..=most).contains(&v) {
+                return Err(bad(cmd, format!("`{weight}` must be between {least} and {most}")));
+            }
+            Some(e)
+        }
+    };
+    Ok((end, weight))
 }
 
 fn thread(s: &mut Session, p: &Value) -> Result<Value> {
@@ -4488,6 +4524,9 @@ mod model_axis_tests;
 #[path = "prism_local_tests.rs"]
 mod prism_local_tests;
 
+#[cfg(test)]
+#[path = "loft_ends_tests.rs"]
+mod loft_ends_tests;
 #[cfg(test)]
 #[path = "loft_rails_tests.rs"]
 mod loft_rails_tests;

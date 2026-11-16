@@ -984,6 +984,44 @@ pub fn planar_face_record(plane: &Plane, r: &Region2) -> Result<solidcore_record
     Ok(brep)
 }
 
+/// How a loft leaves its first section or arrives at its last.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum LoftEnd {
+    /// As the loft through the sections runs: ruled between two sections, smooth through more.
+    #[default]
+    Free,
+    /// Square to the section's plane, towards the side the next section is on. Each point of
+    /// the section leaves with `weight` times the speed of its straight way to the point it is
+    /// joined to in the next section, so parts of a section near the next one take a short
+    /// run-out and parts far from it a long one. 1 is that speed: between two equal sections,
+    /// one square above the other, it is the straight wall. Less turns towards the next section
+    /// sooner, more runs on square to the plane for longer; between sections on parallel planes
+    /// the wall stays between the planes up to 3 at both ends.
+    Square { weight: f64 },
+}
+
+impl LoftEnd {
+    /// The least weight of a square end: a leg a third of this is no longer a direction.
+    pub const MIN_WEIGHT: f64 = 0.01;
+    /// The most: past 3 a wall already runs beyond the next section's plane before it turns back.
+    pub const MAX_WEIGHT: f64 = 10.0;
+
+    /// Whether the end asks nothing of the loft.
+    pub fn is_free(&self) -> bool {
+        matches!(self, LoftEnd::Free)
+    }
+
+    /// Refuses a square end's weight outside [`Self::MIN_WEIGHT`]…[`Self::MAX_WEIGHT`] (NaN too).
+    pub fn check(&self) -> Result<()> {
+        match *self {
+            LoftEnd::Square { weight } if !(Self::MIN_WEIGHT..=Self::MAX_WEIGHT).contains(&weight) => {
+                Err(KernelError::Invalid(format!("a loft end's weight must be between {} and {}", Self::MIN_WEIGHT, Self::MAX_WEIGHT)))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 /// Ruled loft through two or more planar sections (outer loops only). The sections and the
 /// same sections in reverse order give the same body.
 pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
@@ -996,6 +1034,18 @@ pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
 /// sections between. Without rails, the plain loft.
 pub fn loft_with_rails(sections: &[(Plane, Loop2)], rails: &[Vec<Vec3>], fit: RailFit) -> Result<Body> {
     let _span = solidcraft_profile::span("kernel", "loft_with_rails");
+    loft_guided(sections, rails, fit, [LoftEnd::Free; 2])
+}
+
+/// [`loft`] leaving its first section and arriving at its last as `ends` say (the first end is
+/// the first section given). With both ends free, the plain loft.
+fn loft_with_ends(sections: &[(Plane, Loop2)], ends: [LoftEnd; 2]) -> Result<Body> {
+    let _span = solidcraft_profile::span("kernel", "loft_with_ends");
+    loft_guided(sections, &[], RailFit::Scale, ends)
+}
+
+/// The loft through `sections`, following `rails` or (without rails) with `ends`.
+fn loft_guided(sections: &[(Plane, Loop2)], rails: &[Vec<Vec3>], fit: RailFit, ends: [LoftEnd; 2]) -> Result<Body> {
     let reversed = loft_reversed(sections)?;
     let numbered = sections.iter().map(|(p, _)| *p).zip(numbered::number_loops(sections.iter().map(|(_, l)| l))).collect::<Vec<_>>();
     let loops = loft_numbered_loops(&numbered, reversed)?;
@@ -1011,7 +1061,10 @@ pub fn loft_with_rails(sections: &[(Plane, Loop2)], rails: &[Vec<Vec3>], fit: Ra
         if pieces.iter().map(|(_, p)| p.len()).sum::<usize>() > solidcraft_smlib::sweeps::MAX_CURVES {
             pieces = pieces_of(&loft_numbered_loops_by(&numbered, reversed, true)?);
         }
-        return crate::smlib_sweeps::loft(&pieces, first);
+        return crate::smlib_sweeps::loft(&pieces, first, ends);
+    }
+    if ends != [LoftEnd::Free; 2] {
+        return Err(KernelError::Invalid("not supported yet: a loft with guide rails and an end square to its section".into()));
     }
     let mut all = crate::smlib_sweeps::rail_curves(&pieces, rails, fit)?;
     if all.iter().map(Vec::len).sum::<usize>() > solidcraft_smlib::sweeps::MAX_CURVES {
@@ -1026,7 +1079,17 @@ pub fn loft_with_rails(sections: &[(Plane, Loop2)], rails: &[Vec<Vec3>], fit: Ra
 /// Holes are paired by their positions relative to the outline, independently of sketch
 /// curve order. A hole cannot appear or disappear partway through a loft.
 pub fn loft_regions(sections: &[(Plane, Region2)]) -> Result<Body> {
+    loft_regions_with_ends(sections, [LoftEnd::Free; 2])
+}
+
+/// [`loft_regions`] leaving its first section and arriving at its last as `ends` say (the first
+/// end is the first section given): an end square to its section's plane takes the outline and
+/// every hole with it. With both ends free, [`loft_regions`]' loft.
+pub fn loft_regions_with_ends(sections: &[(Plane, Region2)], ends: [LoftEnd; 2]) -> Result<Body> {
     let _span = solidcraft_profile::span("kernel", "loft_regions");
+    for end in &ends {
+        end.check()?;
+    }
     if !(2..=50).contains(&sections.len()) {
         return Err(KernelError::Invalid("a loft needs 2…50 sections".into()));
     }
@@ -1042,7 +1105,7 @@ pub fn loft_regions(sections: &[(Plane, Region2)]) -> Result<Body> {
         region_ok(r)?;
     }
     if holes == 0 {
-        return loft(&sections.iter().map(|(p, r)| (*p, r.outer.clone())).collect::<Vec<_>>());
+        return loft_with_ends(&sections.iter().map(|(p, r)| (*p, r.outer.clone())).collect::<Vec<_>>(), ends);
     }
     let regions: Vec<Region2> = sections.iter().map(|(_, r)| r.clone()).collect();
     let mut numbered = numbered::number_regions(&regions);
@@ -1101,15 +1164,22 @@ pub fn loft_regions(sections: &[(Plane, Region2)]) -> Result<Body> {
     if counts.iter().sum::<usize>() > MAX_SEGS {
         return Err(KernelError::Invalid("matching loft sections would create too many segments".into()));
     }
-    smlib_loft_regions(&outlines, &planes, &numbered, reversed)
+    smlib_loft_regions(&outlines, &planes, &numbered, reversed, ends)
 }
 
 /// [`loft_regions`] through SMLib's skin, which lofts a section's loops (its outline, then its
 /// holes, in the order given) to the loops in the same place in the next: the outline and each
 /// hole matched as above, every section's loops one profile, the holes turned against the
-/// outline. `outlines` are as given, `planes` and the holes of `numbered` in canonical order.
-fn smlib_loft_regions(outlines: &[(Plane, NumberedLoop)], planes: &[Plane], numbered: &[NumberedRegion], reversed: bool) -> Result<Body> {
-    smlib_loft_regions_by(outlines, planes, numbered, reversed, false)
+/// outline. `outlines` are as given, `planes` and the holes of `numbered` in canonical order;
+/// `ends` are the first and the last section's as given.
+fn smlib_loft_regions(
+    outlines: &[(Plane, NumberedLoop)],
+    planes: &[Plane],
+    numbered: &[NumberedRegion],
+    reversed: bool,
+    ends: [LoftEnd; 2],
+) -> Result<Body> {
+    smlib_loft_regions_by(outlines, planes, numbered, reversed, false, ends)
 }
 
 /// [`smlib_loft_regions`], every loop re-split ([`resplit_numbered_loops`]) when `resplit`. The
@@ -1122,6 +1192,7 @@ fn smlib_loft_regions_by(
     numbered: &[NumberedRegion],
     reversed: bool,
     resplit: bool,
+    ends: [LoftEnd; 2],
 ) -> Result<Body> {
     let mut sections: Vec<(Plane, Vec<crate::smlib_sweeps::Piece>)> =
         loft_numbered_loops_by(outlines, reversed, resplit)?.iter().map(|(p, l)| (*p, crate::smlib_sweeps::pieces([l]))).collect();
@@ -1147,10 +1218,10 @@ fn smlib_loft_regions_by(
         && (sections.iter().any(|(_, pieces)| pieces.len() > MAX_SEGS)
             || sections.iter().map(|(_, pieces)| pieces.len()).sum::<usize>() > solidcraft_smlib::sweeps::MAX_CURVES)
     {
-        return smlib_loft_regions_by(outlines, planes, numbered, reversed, true);
+        return smlib_loft_regions_by(outlines, planes, numbered, reversed, true, ends);
     }
     let first = if reversed { sections.len().saturating_sub(1) } else { 0 };
-    crate::smlib_sweeps::loft(&sections, first)
+    crate::smlib_sweeps::loft(&sections, first, ends)
 }
 
 pub(crate) fn loft_reversed(sections: &[(Plane, Loop2)]) -> Result<bool> {

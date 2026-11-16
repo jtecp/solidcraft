@@ -50,6 +50,7 @@ mod dialogs_hole;
 pub mod dialogs_insert_airfoil;
 pub mod dialogs_insert_drawing;
 pub mod dialogs_library;
+pub mod dialogs_loft;
 pub mod dialogs_motion;
 pub mod dialogs_move;
 pub mod dialogs_part_size;
@@ -122,6 +123,8 @@ mod kit_host_tests;
 mod length_input;
 mod linked_source;
 pub mod links;
+#[cfg(test)]
+mod loft_ends_dialog_tests;
 #[cfg(test)]
 mod loft_rails_dialog_tests;
 #[cfg(test)]

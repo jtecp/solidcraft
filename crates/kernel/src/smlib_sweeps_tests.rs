@@ -131,7 +131,7 @@ fn a_loft_and_a_screw_sweep_name_their_ends() {
         let r = region(Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)]));
         (Plane::XY.offset(z), pieces_of(&r))
     };
-    let b = smlib_sweeps::loft(&[square(0.0), square(8.0)], 0).unwrap();
+    let b = smlib_sweeps::loft(&[square(0.0), square(8.0)], 0, [crate::LoftEnd::Free; 2]).unwrap();
     close(volume(&b), 800.0, 1e-6, "loft");
     let o = origins(&b);
     assert!(o.contains(&cap(false)) && o.contains(&cap(true)) && o.iter().filter(|x| x.contains("Profile")).count() == 4, "{o:?}");

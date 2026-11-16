@@ -1102,8 +1102,9 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             }
             crate::dialogs_thread::sync_inputs(&mut d.inputs, &mut d.active, options);
         }
-        Kind::Loft { operation, rail_fit } => {
+        Kind::Loft { operation, rail_fit, ends } => {
             crate::op_auto::op_row(ui, "lf_op", operation);
+            enter |= crate::dialogs_loft::rows(ui, ends);
             crate::dialogs_sweep::rail_fit_row(ui, "lf", rail_fit);
         }
         Kind::Sweep { operation, opts } => {

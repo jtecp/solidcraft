@@ -482,6 +482,25 @@ impl RailFit {
     }
 }
 
+/// How a loft leaves its first section or arrives at its last.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoftEnd {
+    /// As the loft through the sections runs.
+    #[default]
+    Free,
+    /// Perpendicular to the section's sketch plane, towards the next section. How far each
+    /// point runs on that way before it turns is the end's weight times its own distance to
+    /// the next section.
+    Perpendicular,
+}
+
+impl LoftEnd {
+    pub fn is_free(&self) -> bool {
+        *self == LoftEnd::Free
+    }
+}
+
 /// Where a thin wall lies against its curves. A closed loop's inside is the area it encloses;
 /// an open chain's is the side it bends toward (a straight one's, the left of its first
 /// curve as drawn).
@@ -1164,6 +1183,21 @@ pub enum FeatureKind {
         /// How the rails reshape the sections between.
         #[serde(default, skip_serializing_if = "RailFit::is_scale")]
         rail_fit: RailFit,
+        /// How the loft leaves its first section.
+        #[serde(default, skip_serializing_if = "LoftEnd::is_free")]
+        start_condition: LoftEnd,
+        /// How the loft arrives at its last section.
+        #[serde(default, skip_serializing_if = "LoftEnd::is_free")]
+        end_condition: LoftEnd,
+        /// The weight of a perpendicular start (none: 1, the speed of each point's straight
+        /// way to the next section).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(unitless = "Start weight")]
+        start_weight: Option<Expr>,
+        /// The weight of a perpendicular end (none: 1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(unitless = "End weight")]
+        end_weight: Option<Expr>,
     },
     /// Sweep profiles along a chain of sketch curves, or along a chain of a body's edges.
     Sweep {

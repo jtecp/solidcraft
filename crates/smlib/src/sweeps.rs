@@ -11,6 +11,10 @@ use serde_json::json;
 use crate::trace;
 use crate::{Brep, Result, core};
 
+/// How a [`Brep::loft_with_ends`] leaves its first section or arrives at its last: free, or
+/// square to the section's plane with a weight (solidcore-ops' own type).
+pub use solidcore_ops::sweep::LoftEnd;
+
 /// Screw-sweep topology and its approximation tolerance.
 #[derive(Clone, Copy, Debug)]
 pub struct ScrewSweepOptions<'a> {
@@ -226,6 +230,25 @@ impl Brep {
             &[],
             &r,
             || json!({"sections": sections.iter().map(|s| trace::curves(s)).collect::<Vec<_>>(), "degree": degree, "cap": cap}),
+        );
+        r
+    }
+
+    /// [`Brep::loft`], cubic across the sections, with how it leaves its first section and
+    /// arrives at its last (`ends`, at least one of them [`LoftEnd::Square`]: square to the
+    /// section's plane, each point with the weight times the speed of its straight way to the
+    /// next section).
+    pub fn loft_with_ends(sections: &[Vec<Curve>], cap: bool, ends: [LoftEnd; 2]) -> Result<Brep> {
+        let r = core::sweep::loft_with_ends(sections, cap, ends).map(Brep::made_core);
+        let end = |e: LoftEnd| match e {
+            LoftEnd::Free => json!("free"),
+            LoftEnd::Square { weight } => json!({"square": weight}),
+        };
+        trace::made(
+            "loft_with_ends",
+            &[],
+            &r,
+            || json!({"sections": sections.iter().map(|s| trace::curves(s)).collect::<Vec<_>>(), "cap": cap, "ends": ends.map(end)}),
         );
         r
     }
