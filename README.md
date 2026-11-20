@@ -1,0 +1,1 @@
+Screenshots for tangency-labs/solidcraft: a Loft whose start and end leave their sketch planes perpendicular, with a weight per end (branch `loft-end-tangents` of this fork). Made with the control channel on that branch.
